@@ -18,25 +18,54 @@ namespace POC.NinjectMessageHandlerDecoration
             kernel = new StandardKernel();
 
             var definedTypes = Assembly.GetExecutingAssembly().DefinedTypes;
+            var handlerType = typeof (IMessageHandler<>);
             _handlers = definedTypes
                 .Where(type => !type.Name.Contains("Decorator") 
-                    && type.IsAssignableToGenericType(typeof(IMessageHandler<>)));
+                    && type.IsAssignableToGenericType(handlerType));
+
+            _grouping = _handlers
+                .GroupBy(h => h.GetInterfaces()
+                    .First(i => i.IsGenericType && i.GetGenericTypeDefinition() == handlerType)
+                    .GetGenericArguments().First());
+
+            foreach (var group in _grouping)
+            {
+                for (int i = 0; i < group.Count(); i++)
+                {
+                    var handlerTypeInfo = group.ElementAt(i);
+                    kernel.Bind(handlerType.MakeGenericType(group.Key))
+                          .To(handlerTypeInfo)
+                          .WhenParentNamed(i.ToString());
+                }
+            }
+
+            for (int i = 0; i < _grouping.Max(g => g.Count()); i++)
+            {
+                kernel.Bind(handlerType).To(typeof(HandlerDecorator<>)).Named(i.ToString());
+            }
 
             _decorators = definedTypes
                 .Where(type => type.Name.Contains("Decorator")
-                    && type.IsAssignableToGenericType(typeof(IMessageHandler<>)));
-
-            kernel.Bind<IMessageHandler<int>>().To<IntHandlerOne>().WhenParentNamed(1.ToString());
-            kernel.Bind<IMessageHandler<int>>().To<IntHandlerTwo>().WhenParentNamed(2.ToString());
-            kernel.Bind(typeof(IMessageHandler<>)).To(typeof(HandlerDecorator<>)).Named(1.ToString());
-            kernel.Bind(typeof(IMessageHandler<>)).To(typeof(HandlerDecorator<>)).Named(2.ToString());
+                    && type.IsAssignableToGenericType(handlerType));
         };
 
         Because of = 
             () => result = kernel.GetAll<IMessageHandler<int>>();
 
+        It should_have_two_named_decorators =
+            () => _grouping.Max(g => g.Count()).Should().Be(2);
+
+        It should_have_two_groupings =
+            () => _grouping.Count().Should().Be(2);
+
+        It should_have_groupings_of_int_with_count_of_two =
+            () => _grouping.Single(g => g.Key == typeof(int)).Count().Should().Be(2);
+
+        It should_have_groupings_of_string_with_count_of_one =
+            () => _grouping.Single(g => g.Key == typeof(string)).Count().Should().Be(1);
+
         It should_have_three_handlers =
-            () => _handlers.Should().HaveCount(2);
+            () => _handlers.Should().HaveCount(3);
 
         It should_have_one_decorator =
             () => _decorators.Should().HaveCount(1);
@@ -44,7 +73,7 @@ namespace POC.NinjectMessageHandlerDecoration
         It should_not_be_null = 
             () => result.Should().NotBeNull();
 
-        It should_have_two_instances = 
+        It should_have_two_instances =
             () => result.Should().HaveCount(2);
 
         It should_contain_instances_of_decorator_type =
@@ -52,6 +81,7 @@ namespace POC.NinjectMessageHandlerDecoration
 
         private static IEnumerable<TypeInfo> _handlers;
         private static IEnumerable<TypeInfo> _decorators;
+        private static IEnumerable<IGrouping<Type, TypeInfo>> _grouping;
     }
 
     public interface IMessageHandler<T> { void Handle(T message); }
@@ -78,6 +108,10 @@ namespace POC.NinjectMessageHandlerDecoration
     public class IntHandlerTwo : IMessageHandler<int>
     {
         public void Handle(int message) { }
+    }
+    public class StringHandler : IMessageHandler<string>
+    {
+        public void Handle(string message) { }
     }
 
     public static class TypeExtensions
