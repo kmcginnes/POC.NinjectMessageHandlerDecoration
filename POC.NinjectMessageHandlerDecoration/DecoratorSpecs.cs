@@ -3,22 +3,24 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using FluentAssertions;
-using Machine.Specifications;
 using Ninject;
+using Xunit;
 
 namespace POC.NinjectMessageHandlerDecoration
 {
     public class DecoratorSpecs
     {
-        static StandardKernel kernel;
-        static IEnumerable<IMessageHandler<int>> result;
+        private readonly StandardKernel _kernel;
+        private readonly IEnumerable<TypeInfo> _handlers;
+        private readonly IEnumerable<TypeInfo> _decorators;
+        private readonly IEnumerable<IGrouping<Type, TypeInfo>> _grouping;
 
-        Establish context = () =>
+        public DecoratorSpecs()
         {
-            kernel = new StandardKernel();
+            _kernel = new StandardKernel();
 
             var definedTypes = Assembly.GetExecutingAssembly().DefinedTypes;
-            var handlerType = typeof (IMessageHandler<>);
+            var handlerType = typeof (IHandle<>);
             _handlers = definedTypes
                 .Where(type => !type.Name.Contains("Decorator") 
                     && type.IsAssignableToGenericType(handlerType));
@@ -33,83 +35,103 @@ namespace POC.NinjectMessageHandlerDecoration
                 for (int i = 0; i < group.Count(); i++)
                 {
                     var handlerTypeInfo = group.ElementAt(i);
-                    kernel.Bind(handlerType.MakeGenericType(group.Key))
+                    _kernel.Bind(handlerType.MakeGenericType(group.Key))
                           .To(handlerTypeInfo)
                           .WhenParentNamed(i.ToString());
+                    _kernel.Bind(handlerType.MakeGenericType(group.Key))
+                           .To(typeof (HandlerDecorator<>).MakeGenericType(group.Key))
+                           .Named(i.ToString());
                 }
-            }
-
-            for (int i = 0; i < _grouping.Max(g => g.Count()); i++)
-            {
-                kernel.Bind(handlerType).To(typeof(HandlerDecorator<>)).Named(i.ToString());
             }
 
             _decorators = definedTypes
                 .Where(type => type.Name.Contains("Decorator")
                     && type.IsAssignableToGenericType(handlerType));
-        };
+        }
 
-        Because of = 
-            () => result = kernel.GetAll<IMessageHandler<int>>();
+        [Fact]
+        public void should_have_max_count_of_handlers_per_group_of_two()
+        {
+            _grouping.Max(g => g.Count()).Should().Be(2);
+        }
 
-        It should_have_two_named_decorators =
-            () => _grouping.Max(g => g.Count()).Should().Be(2);
+        [Fact]
+        public void should_have_two_groups_of_handler_types()
+        {
+            _grouping.Count().Should().Be(2);
+        }
 
-        It should_have_two_groupings =
-            () => _grouping.Count().Should().Be(2);
+        [Fact]
+        public void should_have_two_handlers_in_int_group()
+        {
+            _grouping.Single(g => g.Key == typeof (int)).Count().Should().Be(2);
+        }
 
-        It should_have_groupings_of_int_with_count_of_two =
-            () => _grouping.Single(g => g.Key == typeof(int)).Count().Should().Be(2);
+        [Fact]
+        public void should_have_one_handler_in_string_group()
+        {
+            _grouping.Single(g => g.Key == typeof (string)).Count().Should().Be(1);
+        }
 
-        It should_have_groupings_of_string_with_count_of_one =
-            () => _grouping.Single(g => g.Key == typeof(string)).Count().Should().Be(1);
+        [Fact]
+        public void should_have_three_total_handlers()
+        {
+            _handlers.Should().HaveCount(3);
+        }
 
-        It should_have_three_handlers =
-            () => _handlers.Should().HaveCount(3);
+        [Fact]
+        public void should_have_one_decorator()
+        {
+            _decorators.Should().HaveCount(1);
+        }
 
-        It should_have_one_decorator =
-            () => _decorators.Should().HaveCount(1);
+        [Fact]
+        public void should_get_decorated_int_handlers_from_ninject()
+        {
+            var handlers = _kernel.GetAll<IHandle<int>>().ToArray();
+            handlers.Should().NotBeNull();
+            handlers.Should().HaveCount(2);
+            handlers.First().Should().BeOfType<HandlerDecorator<int>>();
+            handlers.Cast<HandlerDecorator<int>>().First().Handler.Should().BeOfType<IntHandlerOne>();
+        }
 
-        It should_not_be_null = 
-            () => result.Should().NotBeNull();
-
-        It should_have_two_instances =
-            () => result.Should().HaveCount(2);
-
-        It should_contain_instances_of_decorator_type =
-            () => result.First().Should().BeOfType<HandlerDecorator<int>>();
-
-        private static IEnumerable<TypeInfo> _handlers;
-        private static IEnumerable<TypeInfo> _decorators;
-        private static IEnumerable<IGrouping<Type, TypeInfo>> _grouping;
+        [Fact]
+        public void should_get_decorated_string_handlers_from_ninject()
+        {
+            var handlers = _kernel.GetAll<IHandle<string>>().ToArray();
+            handlers.Should().NotBeNull();
+            handlers.Should().HaveCount(1);
+            handlers.First().Should().BeOfType<HandlerDecorator<string>>();
+            handlers.Cast<HandlerDecorator<string>>().First().Handler.Should().BeOfType<StringHandler>();
+        }
     }
 
-    public interface IMessageHandler<T> { void Handle(T message); }
+    public interface IHandle<T> { void Handle(T message); }
 
-    public class HandlerDecorator<T> : IMessageHandler<T>
+    public class HandlerDecorator<T> : IHandle<T>
     {
-        private readonly IMessageHandler<T> _handler;
+        public readonly IHandle<T> Handler;
 
-        public HandlerDecorator(IMessageHandler<T> handler)
+        public HandlerDecorator(IHandle<T> handler)
         {
-            _handler = handler;
+            Handler = handler;
         }
 
         public void Handle(T message)
         {
-            _handler.Handle(message);
+            Handler.Handle(message);
         }
     }
 
-    public class IntHandlerOne : IMessageHandler<int>
+    public class IntHandlerOne : IHandle<int>
     {
         public void Handle(int message) { }
     }
-    public class IntHandlerTwo : IMessageHandler<int>
+    public class IntHandlerTwo : IHandle<int>
     {
         public void Handle(int message) { }
     }
-    public class StringHandler : IMessageHandler<string>
+    public class StringHandler : IHandle<string>
     {
         public void Handle(string message) { }
     }
